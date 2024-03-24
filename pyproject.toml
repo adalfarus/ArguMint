@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["argumint"]
+
+[project]
+name = "argumint"
+version = "1.0.1"
+dependencies = [
+  "aplustools", 
+]
+requires-python = ">=3.9"
+authors = [
+  {name = "Cariel Becker", email = "cariel.becker@gmx.de"},
+]
+maintainers = [
+  {name = "Cariel Becker", email = "cariel.becker@gmx.de"},
+]
+description = "A fresh new way to handle cli"
+readme = {file = "README.md", content-type = "text/markdown"}
+license = {text = "GPL-3.0-or-later"} # or "GPL-3.0-only"
+keywords = ["cli", "command line", "simplified", "fresh"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Natural Language :: English",
+]
+
+[project.urls]
+Home = "https://pypi.org/project/argumint/"
+Repository = "https://github.com/adalfarus/argumint"
+Documentation = "https://github.com/adalfarus/argumint/wiki"
+"Issue tracker" = "https://github.com/adalfarus/argumint/issues"
