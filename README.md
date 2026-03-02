@@ -3,16 +3,16 @@
  
 This package is just maintained (EOL) as I have rewritten large parts of the package (2k new LOC) and plan to release them under the new name autocli. This could take a 1-2 months though as the old owner of the name seems unresponsive.
 
-I have also updated it with the latest code from aplustools.package.autocli and applied a few patches for common errors for now.
+I have also updated it with the latest code from aplustools.package.autocli and applied a few patches and quality of life enhancements.
 
 ## How to use it
 ```python
-from argumint import ArgStruct, ArguMint
+from argumint import Argumint, ArgumentParsingError
 from typing import Literal
-import sys
+
 
 def sorry(*args, **kwargs):
-    print("Not implemented yet, sorry!")
+    print("This path does not have an endpoint, please use aps help to get help.")
 
 def help_text():
     print("Build -> dir/file or help.")
@@ -26,37 +26,43 @@ def build_file(path: Literal["./main.py", "./file.py"] = "./main.py", num: int =
     """
     print(f"Building file {path} ..., {num}")
 
-from aplustools.package import timid
+from chronix import FlexTimer
 
-timer = timid.TimidTimer()
+timer = FlexTimer()
 
-arg_struct = {'apt': {'build': {'file': {}, 'dir': {'main': {}, 'all': {}}}, 'help': {}}}
+# Initialization
+parser = Argumint(default_endpoint=sorry, arg_struct={
+    'aps': {
+        'build': {
+            'file': {},
+            'dir': {
+                'main': {},
+                'all': {}
+            }
+        },
+        'help': {}
+    }
+})
 
-# Example usage
-builder = ArgStruct()
-builder.add_command("apt")
-builder.add_nested_command("apt", "build", "file")
-
-builder.add_nested_command("apt.build", "dir", {'main': {}, 'all': {}})
-# builder.add_subcommand("apt.build", "dir")
-# builder.add_nested_command("apt.build.dir", "main")
-# builder.add_nested_command("apt.build.dir", "all")
-
-builder.add_command("apt.help")
-# builder.add_nested_command("apt", "help")
-
-print(builder.get_structure())  # Best to cache this for better times (by ~15 microseconds)
-
-parser = ArguMint(default_endpoint=sorry, arg_struct=arg_struct)
-parser.add_endpoint("apt.help", help_text)
-
-parser.add_endpoint("apt.build.file", build_file)
-
-sys.argv[0] = "apt"
+# Add endpoints
+parser.add_endpoint("aps.help", help_text)
+parser.add_endpoint("aps.build.file", build_file)
 
 # Testing
-# sys.argv = ["apt", "help"]
-# sys.argv = ["apt", "build", "file", "./file.py", "--num=19"]
-parser.parse_cli(sys, "native_light")
-print(timer.end())
+try:
+    print("---- 1 ----")
+    parser.parse_cli(["main.py", "help"], "native_light")
+    print(timer.lap().to_readable())
+    print("---- 2 ----")
+    parser.parse_cli(["main.py", "build", "file", "./file.py", "--num=19"], "native_light")
+    print(timer.lap().to_readable())
+    print("---- 3 ----")
+    parser.parse_cli(mode="native_light")
+    print(timer.lap().to_readable())
+    print("---- 4 ----")
+    parser.parse_cli(["main.py", "build", "file", "./file.py", "--num", "=", "19"], "native_light")  # Error
+    print(timer.lap().to_readable())
+except ArgumentParsingError as e:
+    print(f"There was an error while parsing '{e}'.")
+timer.end()
 ```

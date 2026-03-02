@@ -46,6 +46,10 @@ def analyze_function(function: _a.Callable) -> dict[str, list[_ty.Any] | str | N
             - "return_choices" (List[Any] or []): Options for `Literal` type hints for the return type, if applicable.
             - "return_doc_help" (str): The extracted docstring help for the return type.
     """
+    if (not isinstance(function, _ts.FunctionType)
+            and hasattr(function, "__call__")
+            and isinstance(function.__call__, _ts.FunctionType)):
+        function = function.__call__
     if hasattr(function, "__func__"):
         function = function.__func__
     elif not isinstance(function, _ts.FunctionType):
@@ -70,13 +74,13 @@ def analyze_function(function: _a.Callable) -> dict[str, list[_ty.Any] | str | N
     type_hints = _ty.get_type_hints(function)
 
     pos_argcount = function.__code__.co_argcount  # After which i we have kwarg only
-    if has_args:
-        argument_names.insert(pos_argcount, "args")
-        defaults.insert(pos_argcount, None)
-        pos_argcount += 1
-    if has_kwargs:
-        argument_names.append("kwargs")
-        defaults.append(None)
+    # if has_args:
+    #     argument_names.insert(pos_argcount, "args")
+    #     defaults.insert(pos_argcount, None)
+    #     pos_argcount += 1
+    # if has_kwargs:
+    #     argument_names.append("kwargs")
+    #     defaults.append(None)
     argument_names.append("return")
     defaults.append(None)
 
@@ -154,14 +158,14 @@ class EndPoint:
             which will be called when the endpoint is invoked.
     """
 
-    def __init__(self, function: _ts.FunctionType) -> None:
+    def __init__(self, function: _a.Callable) -> None:
         self.analysis: dict[str, list[_ty.Any] | str | None] = analyze_function(
             function
         )
         self._arg_index: dict[str, int] = {
             arg["name"]: i for i, arg in enumerate(self.analysis["arguments"])
         }
-        self._function: _ts.FunctionType = function
+        self._function: _a.Callable = function
 
     def call(self, *args, **kwargs) -> None:
         """Executes the internal function using the specified arguments.
@@ -293,8 +297,10 @@ class Argumint:
     """
 
     def __init__(
-        self, default_endpoint: EndPoint, arg_struct: dict[str, dict | str]
+        self, default_endpoint: EndPoint | _a.Callable, arg_struct: dict[str, dict | str]
     ) -> None:
+        if not isinstance(default_endpoint, EndPoint):
+            default_endpoint = EndPoint(default_endpoint)
         self.default_endpoint: EndPoint = default_endpoint
         self._arg_struct: dict[str, dict | str] = arg_struct
         self._endpoints: dict[str, EndPoint] = {}
@@ -372,7 +378,7 @@ class Argumint:
             f"Removed {len([self._endpoints.pop(epPath) for epPath in to_del])} endpoints."
         )
 
-    def add_endpoint(self, path: str, endpoint: EndPoint) -> None:
+    def add_endpoint(self, path: str, endpoint: EndPoint | _a.Callable) -> None:
         """Adds an endpoint at a specified path within the structure.
 
         The endpoint will be callable from the CLI if the provided path matches.
@@ -387,13 +393,15 @@ class Argumint:
         """
         if self._check_path(path):
             if not self._endpoints.get(path):
+                if not isinstance(endpoint, EndPoint):
+                    endpoint = EndPoint(endpoint)
                 self._endpoints[path] = endpoint
             else:
                 raise ValueError(f"The path {path} already has an endpoint.")
         else:
             raise ValueError(f"The path '{path}' doesn't exist.")
 
-    def replace_endpoint(self, path: str, endpoint: EndPoint) -> None:
+    def replace_endpoint(self, path: str, endpoint: EndPoint | _a.Callable) -> None:
         """Replaces an existing endpoint at a given path.
 
         This method checks if the specified path exists in the argument structure
@@ -408,6 +416,8 @@ class Argumint:
             ValueError: If the specified path does not exist in the argument structure.
         """
         if self._check_path(path):
+            if not isinstance(endpoint, EndPoint):
+                endpoint = EndPoint(endpoint)
             self._endpoints[path] = endpoint
         else:
             raise ValueError(f"The path '{path}' doesn't exist.")
@@ -644,11 +654,8 @@ class Argumint:
         )
         return func(args, endpoint)
 
-    def parse_cli(
-        self,
-        system: sys = sys,
-        mode: _ty.Literal["arg_parse", "native_light"] = "arg_parse",
-    ) -> None:
+    def parse_cli(self, arguments: list[str] | None = None,
+                  mode: _ty.Literal["arg_parse", "native_light"] = "arg_parse") -> None:
         """Parses CLI arguments and calls the endpoint based on the parsed path.
 
         This method processes command-line input, navigates the argument structure,
@@ -656,12 +663,13 @@ class Argumint:
         the `default_endpoint`.
 
         Args:
-            system (sys, optional): System module to access arguments from `argv`.
+            arguments (list, optional): Arguments to parse, if None, use sys.argv instead.
             mode (Literal["arg_parse", "native_light"], optional): Mode to parse
                 arguments. Defaults to `"arg_parse"`, but `"native_light"` can be used
                 for lightweight parsing.
         """
-        arguments = system.argv
+        arguments = (arguments or sys.argv)
+        arguments[0] = list(self._arg_struct.keys())[0]  # Implant correct root node
         pre_args = self._parse_pre_args(arguments)
         path = ".".join(pre_args)
         preargs_stop_idx: int
