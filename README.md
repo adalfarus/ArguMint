@@ -1,7 +1,7 @@
 # ArguMint
  A fresh new way to handle cli. 
  
-This package is just maintained as I have rewritten large parts of the package and plan to release them under the new name autocli. This could take a 1-2 months though as the old owner of the name seems unresponsive.
+This package is just maintained (EOL) as I have rewritten large parts of the package (2k new LOC) and plan to release them under the new name autocli. This could take a 1-2 months though as the old owner of the name seems unresponsive.
 
 I have also updated it with the latest code from aplustools.package.autocli and applied a few patches for common errors for now.
 
