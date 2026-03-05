@@ -15,7 +15,8 @@ if _ty.TYPE_CHECKING:
     import _typeshed as _tsh
 import types as _ts
 
-__version__ = "2.0.0"
+__version__ = "2.0.1"
+__all__ = ["NoDefault", "analyze_function", "Endpoint", "ArgumentParsingError", "Interface"]
 
 
 class NoDefault:
