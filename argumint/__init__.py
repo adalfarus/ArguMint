@@ -1,5 +1,9 @@
 """TBA"""
-from argparse import ArgumentParser as _ArgumentParser
+from warnings import deprecated
+from functools import reduce
+from operator import or_
+import argparse
+import warnings
 import sys
 
 # Standard typing imports for aps
@@ -11,7 +15,7 @@ if _ty.TYPE_CHECKING:
     import _typeshed as _tsh
 import types as _ts
 
-__version__ = "1.1.0"
+__version__ = "2.0.0"
 
 
 class NoDefault:
@@ -64,7 +68,7 @@ def analyze_function(function: _a.Callable) -> dict[str, list[_ty.Any] | str | N
     argument_names = list(function.__code__.co_varnames[:arg_count] or ())
     has_args = (function.__code__.co_flags & 0b0100) == 4
     has_kwargs = (function.__code__.co_flags & 0b1000) == 8
-    defaults = [NoDefault() for _ in range(len(argument_names))]
+    defaults: list[_ty.Any | NoDefault | None] = [NoDefault() for _ in range(len(argument_names))]
     defaults.extend(list(function.__defaults__ or ()))
     if function.__kwdefaults__ is not None:
         defaults.extend(list(function.__kwdefaults__.values()))
@@ -74,13 +78,6 @@ def analyze_function(function: _a.Callable) -> dict[str, list[_ty.Any] | str | N
     type_hints = _ty.get_type_hints(function)
 
     pos_argcount = function.__code__.co_argcount  # After which i we have kwarg only
-    # if has_args:
-    #     argument_names.insert(pos_argcount, "args")
-    #     defaults.insert(pos_argcount, None)
-    #     pos_argcount += 1
-    # if has_kwargs:
-    #     argument_names.append("kwargs")
-    #     defaults.append(None)
     argument_names.append("return")
     defaults.append(None)
 
@@ -113,6 +110,7 @@ def analyze_function(function: _a.Callable) -> dict[str, list[_ty.Any] | str | N
         type_hint = type_hints.get(argument_name)
         if getattr(type_hint, "__origin__", None) is _ty.Literal:
             choices = type_hint.__args__
+            types[argument_name] = reduce(or_, [type(x) for x in type_hint.__args__])
         result["arguments"].append(
             {
                 "name": argument_name,
@@ -142,7 +140,7 @@ class ArgumentParsingError(Exception):
         self.index: int = index
 
 
-class EndPoint:
+class Endpoint:
     """Represents the endpoint of a trace from an argument structure object.
 
     The `EndPoint` class serves as a container for functions associated with
@@ -188,102 +186,10 @@ class EndPoint:
         return f"Endpoint(arguments={args})"
 
 
-class ArgStructBuilder:
-    """A utility class for constructing and managing a hierarchical argument structure.
-
-    `ArgStructBuilder` allows users to build a nested dictionary structure that
-    represents CLI commands and their subcommands. The resulting structure can be
-    used in CLI parsers or for other command-line interfaces.
-
-    Attributes:
-        _commands (dict): The command structure dictionary, storing commands and
-            subcommands with their respective mappings.
-    """
-
-    def __init__(self) -> None:
-        self._commands: dict[str, dict | str] = {}
-
-    def add_command(self, command: str, subcommands: dict | None = None) -> None:
-        """Adds a top-level command with optional subcommands.
-
-        Args:
-            command (str): The main command to add to the structure.
-            subcommands (Optional[dict], optional): Dictionary of subcommands,
-                if applicable. If not provided, an empty dictionary is assigned.
-        """
-        if subcommands is None:
-            subcommands = {}
-        self._commands[command] = subcommands
-
-    def add_subcommand(self, parent: str, subcommand: str) -> None:
-        """Adds a subcommand under an existing top-level command.
-
-        If the parent command does not exist, raises a `ValueError`.
-
-        Args:
-            parent (str): The parent command under which to add the subcommand.
-            subcommand (str): The subcommand to add within the parent command.
-
-        Raises:
-            ValueError: If the parent command does not exist or is incompatible
-                with having subcommands.
-        """
-        if parent not in self._commands:
-            raise ValueError(f"Command '{parent}' not found.")
-        if isinstance(self._commands[parent], dict):
-            self._commands[parent][subcommand] = {}
-        else:
-            raise ValueError(f"Command '{parent}' cannot have subcommands.")
-
-    def add_nested_command(
-        self, parent: str, command: str, subcommand: str | dict | None
-    ) -> None:
-        """Adds a nested command within a command structure hierarchy.
-
-        Navigates to the specified parent path in the command structure, allowing
-        creation of complex, multi-level command hierarchies.
-
-        Args:
-            parent (str): Dot-separated string representing the parent command path.
-            command (str): The command to add within the specified parent path.
-            subcommand (Optional[str | dict]): Structure for the subcommand. If
-                `None`, an empty dictionary is used.
-
-        Raises:
-            ValueError: If the specified parent path is not valid.
-        """
-        if subcommand is None:
-            subcommand = {}
-
-        # Navigate to the correct parent level
-        parts = parent.split(".")
-        current_level = self._commands
-        for part in parts:
-            if part not in current_level or not isinstance(current_level[part], dict):
-                raise ValueError(
-                    f"Command '{parent}' not found or is not a valid parent."
-                )
-            current_level = current_level[part]
-
-        if isinstance(subcommand, str):
-            current_level[command] = {subcommand: {}}
-        else:
-            current_level[command] = subcommand
-
-    def get_structure(self) -> dict[str, dict | str]:
-        """Retrieves the full command structure dictionary.
-
-        Returns:
-            dict: The dictionary representing all commands and subcommands,
-            which can be used directly by other classes or modules for parsing.
-        """
-        return self._commands
-
-
 _A = _ty.TypeVar("_A")
 
 
-class Argumint:
+class Interface:
     """A command-line argument parser that uses structured arguments and endpoints.
 
     Argumint is designed to parse CLI arguments using a predefined argument structure.
@@ -291,19 +197,16 @@ class Argumint:
     and execute endpoints based on parsed arguments.
 
     Attributes:
-        default_endpoint (EndPoint): The default endpoint to call if a path cannot be resolved.
+        _default_endpoint (Endpoint): The default endpoint to call if a path cannot be resolved.
         _arg_struct (dict): The dictionary representing the current argument structure.
         _endpoints (dict): A mapping of argument paths to endpoint functions.
     """
 
-    def __init__(
-        self, default_endpoint: EndPoint | _a.Callable, arg_struct: dict[str, dict | str]
-    ) -> None:
-        if not isinstance(default_endpoint, EndPoint):
-            default_endpoint = EndPoint(default_endpoint)
-        self.default_endpoint: EndPoint = default_endpoint
-        self._arg_struct: dict[str, dict | str] = arg_struct
-        self._endpoints: dict[str, EndPoint] = {}
+    def __init__(self, name: str, path_seperator: str = ".") -> None:
+        self._name: str = name
+        self._path_seperator: str = path_seperator
+        self._arg_struct: dict[str, dict] = {name: dict()}
+        self._endpoints: dict[tuple[str, ...], Endpoint] = dict()
 
     @staticmethod
     def _error(i: int, command_string: str) -> None:
@@ -358,71 +261,23 @@ class Argumint:
             current_level = current_level[point]
         return True
 
-    def replace_arg_struct(self, new_arg_struct: dict) -> None:
-        """Replaces the current argument structure with a new one.
+    def path(self, path: str, endpoint: Endpoint | _a.Callable | None = None, /, create_path: bool = True,
+             replace_endpoint: bool = True) -> None:
+        if endpoint is not None and not isinstance(endpoint, Endpoint):
+            endpoint = Endpoint(endpoint)
+        split_path: tuple[str, ...] = tuple(path.split(self._path_seperator))
+        if split_path in self._endpoints and not replace_endpoint:
+            raise ValueError(f"Path {path} already has an endpoint and replace_endpoint was turned off.")
+        current_level: dict[str, dict] = self._arg_struct[self._name]
+        for piece in split_path:
+            if piece not in current_level:
+                if not create_path:
+                    raise ValueError(f"{piece} was not in the level {current_level} and create_path was turned off.")
+                current_level[piece] = dict()
+            current_level = current_level[piece]
+        self._endpoints[split_path] = endpoint
 
-        Updates the structure and removes any existing endpoints that do not match
-        the new structure.
-
-        Args:
-            new_arg_struct (dict): The new argument structure to replace the current one.
-        """
-        to_del = []
-        for path, endpoint in self._endpoints.items():
-            if self._check_path(path, new_arg_struct):
-                continue
-            else:
-                to_del.append(path)
-        self._arg_struct = new_arg_struct
-        print(
-            f"Removed {len([self._endpoints.pop(epPath) for epPath in to_del])} endpoints."
-        )
-
-    def add_endpoint(self, path: str, endpoint: EndPoint | _a.Callable) -> None:
-        """Adds an endpoint at a specified path within the structure.
-
-        The endpoint will be callable from the CLI if the provided path matches.
-
-        Args:
-            path (str): Dot-separated path where the endpoint will be added.
-            endpoint (EndPoint): The endpoint instance to associate with the path.
-
-        Raises:
-            ValueError: If the path does not exist within the argument structure
-                or if it already has an endpoint assigned.
-        """
-        if self._check_path(path):
-            if not self._endpoints.get(path):
-                if not isinstance(endpoint, EndPoint):
-                    endpoint = EndPoint(endpoint)
-                self._endpoints[path] = endpoint
-            else:
-                raise ValueError(f"The path {path} already has an endpoint.")
-        else:
-            raise ValueError(f"The path '{path}' doesn't exist.")
-
-    def replace_endpoint(self, path: str, endpoint: EndPoint | _a.Callable) -> None:
-        """Replaces an existing endpoint at a given path.
-
-        This method checks if the specified path exists in the argument structure
-        before replacing the existing endpoint with the new one. If the path does
-        not exist, an error is raised.
-
-        Args:
-            path (str): The path where the endpoint will be replaced.
-            endpoint (EndPoint): The new endpoint to assign to the specified path.
-
-        Raises:
-            ValueError: If the specified path does not exist in the argument structure.
-        """
-        if self._check_path(path):
-            if not isinstance(endpoint, EndPoint):
-                endpoint = EndPoint(endpoint)
-            self._endpoints[path] = endpoint
-        else:
-            raise ValueError(f"The path '{path}' doesn't exist.")
-
-    def _parse_pre_args(self, pre_args: list[str]) -> list[str]:
+    def _parse_pre_args(self, arguments: list[str]) -> tuple[tuple[str, ...], list[str], dict[str, dict]]:
         """Parses and validates preliminary arguments from the CLI.
 
         This method traverses the argument structure and verifies that the provided
@@ -430,7 +285,7 @@ class Argumint:
         parsed arguments.
 
         Args:
-            pre_args (list[str]): List of preliminary command arguments from the CLI.
+            arguments (list[str]): List of preliminary command arguments from the CLI.
 
         Returns:
             list[str]: A list of parsed arguments that form a valid command path.
@@ -442,28 +297,31 @@ class Argumint:
         struct_lst = []
 
         current_struct = self._arg_struct
-        i = call = None
+        i = 0
+        call = None
         try:
-            for i, call in enumerate(pre_args):
-                if call in current_struct or (
-                    "ANY" in current_struct and len(current_struct) == 1
-                ):
+            for i, call in enumerate(arguments + [None]):  # Need to add empty element as i signifies the "pre_arg area"
+                # so when the last arg is from the pre args it gives it as a parameter. To get around that we could
+                # start at i=1 to declare the current argument as "pre_arg" without checking, but we would need to
+                # reverse that decision if we only have 1 passed arg, so I decided it would be best to just have one
+                # empty arg appended at the end that increases i by one in the event we do not have any passed args.
+                if call in current_struct:
                     struct_lst.append(call)
-                    if not i == len(pre_args) - 1:
+                    if not i == len(arguments):
                         current_struct = current_struct[call]
-                elif len(current_struct) == 0:  # At endpoint
+                else:#elif len(current_struct) == 0:  # At endpoint
                     break
-                else:
-                    raise IndexError
+                #else:
+                #    raise IndexError
         except TypeError:
             print("Too many pre arguments.")
-            self._lst_error(i, 0, pre_args, True)
+            self._lst_error(i, 0, arguments, True)
         except (IndexError, KeyError):
             print(
                 f"The argument '{call}' doesn't exist in current_struct ({current_struct})."
             )
-            self._lst_error(i, 0, pre_args, True)
-        return struct_lst
+            self._lst_error(i, 0, arguments, True)
+        return tuple(struct_lst), arguments[i:], current_struct
 
     @staticmethod
     def _to_type(to_type: str, type_: _ty.Type[_A] | None) -> _A | None:
@@ -501,8 +359,9 @@ class Argumint:
         return type_(to_type)
 
     @classmethod
+    @deprecated("The mode 'native_light' is deprecated. Please use 'argparse' instead.")
     def _parse_args_native_light(
-        cls, args: list[str], endpoint: EndPoint, smart_typing: bool = True
+        cls, args: list[str], endpoint: Endpoint, smart_typing: bool = True
     ) -> dict[str, _ty.Any]:
         """Parses command-line arguments in a lightweight manner.
 
@@ -512,7 +371,7 @@ class Argumint:
 
         Args:
             args (list[str]): The list of arguments from the CLI.
-            endpoint (EndPoint): The endpoint for which arguments are parsed.
+            endpoint (Endpoint): The endpoint for which arguments are parsed.
             smart_typing (bool, optional): If True, attempts to match argument types
                 intelligently based on their default values.
 
@@ -589,8 +448,8 @@ class Argumint:
         return parsed_args
 
     @staticmethod
-    def _parse_args_arg_parse(
-        args: list[str], endpoint: EndPoint
+    def _parse_args_argparse(
+        args: list[str], endpoint: Endpoint
     ) -> dict[str, _ty.Any]:
         """Parses command-line arguments using the argparse library.
 
@@ -599,12 +458,12 @@ class Argumint:
 
         Args:
             args (list[str]): The list of command-line arguments to parse.
-            endpoint (EndPoint): The endpoint that defines the argument structure.
+            endpoint (Endpoint): The endpoint that defines the argument structure.
 
         Returns:
             dict[str, _ty.Any]: A dictionary of parsed argument names and values.
         """
-        parser = _ArgumentParser()
+        parser = argparse.ArgumentParser()
 
         # Set up argparse for keyword and flag arguments
         for arg in endpoint.analysis["arguments"]:
@@ -616,46 +475,31 @@ class Argumint:
                     help=arg.get("help", "No help available"),
                 )
             else:
-                parser.add_argument(
-                    f"--{arg['name']}",
+                parser.add_argument(  # Positional
+                    arg['name'],
                     type=arg["type"],
-                    default=arg["default"],
+                    default=argparse.SUPPRESS,
+                    choices=arg["choices"] if arg["choices"] else None,
+                    help=arg.get("help", "No help available"),
+                    nargs="?"
+                )
+                parser.add_argument(
+                    f"--{arg['name']}", dest=arg['name'],
+                    type=arg["type"],
+                    default=argparse.SUPPRESS,
+                    choices=arg["choices"] if arg["choices"] else None,
                     help=arg.get("help", "No help available"),
                 )
 
         # Parse arguments with argparse
-        parsed_args = parser.parse_args(args)
+        parsed_args: argparse.Namespace = parser.parse_args(args)
+        for arg in endpoint.analysis["arguments"]:
+            if not hasattr(parsed_args, arg["name"]):
+                setattr(parsed_args, arg["name"], arg["default"])
         return vars(parsed_args)
 
-    def _parse_args(
-        self,
-        args: list[str],
-        endpoint: EndPoint,
-        mode: _ty.Literal["arg_parse", "native_light"] = "arg_parse",
-    ) -> dict[str, _ty.Any]:
-        """Dispatches argument parsing to a specified mode.
-
-        This method selects the appropriate parsing function (argparse or native light)
-        and processes the arguments accordingly.
-
-        Args:
-            args (list[str]): The list of command-line arguments.
-            endpoint (EndPoint): The endpoint defining argument requirements.
-            mode (Literal["arg_parse", "native_light"], optional): Parsing mode.
-                Defaults to `"arg_parse"`, but `"native_light"` can be used for lightweight parsing.
-
-        Returns:
-            dict[str, _ty.Any]: Parsed arguments as a dictionary.
-        """
-        func = (
-            self._parse_args_native_light
-            if mode == "native_light"
-            else self._parse_args_arg_parse
-        )
-        return func(args, endpoint)
-
     def parse_cli(self, arguments: list[str] | None = None,
-                  mode: _ty.Literal["arg_parse", "native_light"] = "arg_parse") -> None:
+                  mode: _ty.Literal["argparse", "native_light"] = "argparse") -> None:
         """Parses CLI arguments and calls the endpoint based on the parsed path.
 
         This method processes command-line input, navigates the argument structure,
@@ -668,20 +512,29 @@ class Argumint:
                 arguments. Defaults to `"arg_parse"`, but `"native_light"` can be used
                 for lightweight parsing.
         """
+        if mode == "native_light":
+            warnings.warn("The mode 'native_light' is deprecated. Please use 'argparse' instead.", stacklevel=2)
         arguments = (arguments or sys.argv)
-        arguments[0] = list(self._arg_struct.keys())[0]  # Implant correct root node
-        pre_args = self._parse_pre_args(arguments)
-        path = ".".join(pre_args)
-        preargs_stop_idx: int
-        if len(pre_args) != 0:
-            preargs_stop_idx = (
-                arguments.index(pre_args[-1]) + 1
-            )  # Fix => remove single "root" arg in next big update, also update the class name
-        else:
-            preargs_stop_idx = 1  # Temp fix
-        args = arguments[
-            preargs_stop_idx:
-        ]  # Will return an empty list, if [i:] is longer than the list
-        endpoint = self._endpoints.get(path) or self.default_endpoint
-        arguments = self._parse_args(args, endpoint, mode)
-        endpoint.call(**arguments)
+        arguments[0] = self._name  # Implant correct root node
+        pre_args, val_args, curr_struct = self._parse_pre_args(arguments)
+
+        endpoint = self._endpoints.get(pre_args[1:])  # Skip root node
+        if endpoint is None:
+            def _explore_path(curr_path: tuple[str, ...], path: dict[str, dict]) -> list[str]:
+                if not path:
+                    return [self._path_seperator.join(curr_path)]
+                shard: list[str] = [self._path_seperator.join(curr_path)] if curr_path in self._endpoints else []
+                return shard + reduce(lambda x, y: x+y, [_explore_path((*curr_path, name), rest) for name, rest in path.items()], [])
+
+            print("commands:")  # Provide structure help
+            possible_paths: list[str] = _explore_path(pre_args, curr_struct)
+            if self._path_seperator.join(pre_args) in possible_paths:
+                possible_paths.remove(self._path_seperator.join(pre_args))
+            for possible_path in possible_paths or ["(no commands registered)"]:
+                print(f" - {possible_path}")
+            return  # sys.exit(0)  # We can just return here
+        parsed_arguments: dict[str, _ty.Any] = {
+            "native_light": self._parse_args_native_light,
+            "argparse": self._parse_args_argparse
+        }[mode](val_args, endpoint)
+        endpoint.call(**parsed_arguments)
